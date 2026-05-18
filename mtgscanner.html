@@ -1,0 +1,749 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MTG Card Scanner → Moxfield</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Fraunces:opsz,wght@9..144,300;9..144,600&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0d0f12;
+    --surface: #161a1f;
+    --surface2: #1e2329;
+    --border: rgba(255,255,255,0.08);
+    --border2: rgba(255,255,255,0.15);
+    --gold: #e8b84b;
+    --gold-dim: rgba(232,184,75,0.18);
+    --text: #e8e6e1;
+    --muted: #7a7f8a;
+    --green: #4ade80;
+    --red: #f87171;
+    --blue: #60a5fa;
+    --radius: 10px;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Mono', monospace;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 2rem 1rem 4rem;
+  }
+
+  header {
+    text-align: center;
+    margin-bottom: 2rem;
+  }
+
+  header h1 {
+    font-family: 'Fraunces', serif;
+    font-weight: 300;
+    font-size: 2.2rem;
+    letter-spacing: -0.02em;
+    color: var(--text);
+  }
+
+  header h1 span { color: var(--gold); }
+
+  header p {
+    font-size: 0.75rem;
+    color: var(--muted);
+    margin-top: 0.4rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .app {
+    width: 100%;
+    max-width: 780px;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  /* Camera panel */
+  .camera-panel {
+    background: var(--surface);
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+
+  .video-wrap {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 16/9;
+    background: #000;
+  }
+
+  #video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  #canvas { display: none; }
+
+  .scan-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: flex-end;
+    justify-content: flex-start;
+    pointer-events: none;
+    padding: 0 0 8% 2%;
+  }
+
+  .scan-box {
+    position: relative;
+    width: 42%;
+    height: 18%;
+  }
+
+  .scan-box::before, .scan-box::after,
+  .scan-box .corner-bl, .scan-box .corner-br {
+    content: '';
+    position: absolute;
+    width: 18px;
+    height: 18px;
+    border-color: var(--gold);
+    border-style: solid;
+  }
+  .scan-box::before { top: 0; left: 0; border-width: 2px 0 0 2px; }
+  .scan-box::after  { top: 0; right: 0; border-width: 2px 2px 0 0; }
+  .scan-box .corner-bl { bottom: 0; left: 0; border-width: 0 0 2px 2px; }
+  .scan-box .corner-br { bottom: 0; right: 0; border-width: 0 2px 2px 0; }
+
+  .scan-line {
+    position: absolute;
+    left: 4px; right: 4px;
+    height: 1.5px;
+    background: linear-gradient(90deg, transparent, var(--gold), transparent);
+    animation: sweep 2s ease-in-out infinite;
+  }
+
+  @keyframes sweep {
+    0%, 100% { top: 4px; opacity: 0.4; }
+    50% { top: calc(100% - 6px); opacity: 1; }
+  }
+
+  .scan-label {
+    position: absolute;
+    bottom: -26px;
+    left: 50%;
+    transform: translateX(-50%);
+    white-space: nowrap;
+    font-size: 11px;
+    color: rgba(232,184,75,0.7);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .camera-dimmer {
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,0.42);
+    clip-path: polygon(
+      0% 0%, 100% 0%, 100% 100%, 0% 100%,
+      0% 0%
+    );
+    pointer-events: none;
+  }
+
+  /* Status bar */
+  .status-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    background: var(--surface2);
+    border-top: 0.5px solid var(--border);
+    font-size: 12px;
+    min-height: 44px;
+    transition: background 0.3s;
+  }
+
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    background: var(--muted);
+    transition: background 0.3s;
+  }
+  .status-dot.active { background: var(--green); box-shadow: 0 0 6px var(--green); animation: pulse 1.5s infinite; }
+  .status-dot.warn { background: var(--gold); }
+  .status-dot.err { background: var(--red); }
+
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+  #status-text { color: var(--muted); flex: 1; }
+
+  /* Controls */
+  .controls {
+    display: flex;
+    gap: 8px;
+    padding: 14px 16px;
+    flex-wrap: wrap;
+    align-items: center;
+    border-top: 0.5px solid var(--border);
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-family: 'DM Mono', monospace;
+    font-size: 12px;
+    cursor: pointer;
+    border: 0.5px solid var(--border2);
+    background: transparent;
+    color: var(--text);
+    transition: background 0.15s, border-color 0.15s;
+    letter-spacing: 0.03em;
+  }
+  .btn:hover { background: var(--surface2); border-color: rgba(255,255,255,0.25); }
+  .btn:active { transform: scale(0.98); }
+  .btn.primary { border-color: var(--gold); color: var(--gold); }
+  .btn.primary:hover { background: var(--gold-dim); }
+  .btn:disabled { opacity: 0.35; cursor: not-allowed; transform: none; }
+
+  select, input[type=text] {
+    font-family: 'DM Mono', monospace;
+    font-size: 12px;
+    padding: 7px 10px;
+    border-radius: 6px;
+    border: 0.5px solid var(--border2);
+    background: var(--surface2);
+    color: var(--text);
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  select:focus, input[type=text]:focus { border-color: var(--gold); }
+
+  .foil-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--muted);
+    cursor: pointer;
+    user-select: none;
+  }
+  .foil-label input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--gold); cursor: pointer; }
+
+  /* Manual add */
+  .manual-section {
+    background: var(--surface);
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+  }
+
+  .manual-section label {
+    display: block;
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 8px;
+  }
+
+  .manual-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  #manual-set { width: 80px; text-transform: uppercase; }
+  #manual-num { width: 80px; }
+
+  /* Card list */
+  .list-panel {
+    background: var(--surface);
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+
+  .list-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 0.5px solid var(--border);
+  }
+
+  .list-title {
+    font-family: 'Fraunces', serif;
+    font-weight: 300;
+    font-size: 1rem;
+    color: var(--text);
+  }
+
+  .list-title span {
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+    margin-left: 8px;
+    font-weight: 400;
+  }
+
+  .empty-state {
+    padding: 3rem;
+    text-align: center;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .empty-icon {
+    font-size: 2.5rem;
+    margin-bottom: 0.75rem;
+    opacity: 0.3;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+
+  thead th {
+    text-align: left;
+    padding: 8px 12px;
+    color: var(--muted);
+    font-weight: 400;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    border-bottom: 0.5px solid var(--border);
+  }
+
+  tbody tr {
+    border-bottom: 0.5px solid var(--border);
+    transition: background 0.1s;
+  }
+  tbody tr:last-child { border-bottom: none; }
+  tbody tr:hover { background: var(--surface2); }
+  tbody tr.flash { animation: rowFlash 0.6s ease; }
+  @keyframes rowFlash { 0%{background: rgba(74,222,128,0.12)} 100%{background:transparent} }
+
+  td { padding: 9px 12px; vertical-align: middle; }
+
+  .card-name { color: var(--text); font-weight: 500; }
+  .card-set  { color: var(--muted); font-size: 11px; }
+
+  .qty-ctrl {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .qty-btn {
+    width: 22px; height: 22px;
+    border-radius: 4px;
+    border: 0.5px solid var(--border2);
+    background: transparent;
+    color: var(--text);
+    cursor: pointer;
+    font-size: 14px;
+    display: flex; align-items: center; justify-content: center;
+    line-height: 1;
+    transition: background 0.1s;
+  }
+  .qty-btn:hover { background: var(--surface2); }
+
+  .qty-num {
+    min-width: 24px;
+    text-align: center;
+    font-size: 13px;
+    font-weight: 500;
+  }
+
+  .foil-badge {
+    font-size: 10px;
+    background: rgba(232,184,75,0.15);
+    color: var(--gold);
+    border-radius: 4px;
+    padding: 2px 6px;
+    letter-spacing: 0.05em;
+  }
+
+  .del-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 16px;
+    transition: color 0.15s;
+    padding: 0 4px;
+  }
+  .del-btn:hover { color: var(--red); }
+
+  .tip {
+    font-size: 11px;
+    color: var(--muted);
+    padding: 10px 16px;
+    border-top: 0.5px solid var(--border);
+    line-height: 1.6;
+  }
+  .tip strong { color: var(--gold); font-weight: 500; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>MTG <span>Card Scanner</span></h1>
+  <p>Scan → Identify → Export to Moxfield</p>
+</header>
+
+<div class="app">
+
+  <!-- Camera -->
+  <div class="camera-panel">
+    <div class="video-wrap">
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="canvas"></canvas>
+      <div class="scan-overlay">
+        <div class="scan-box">
+          <div class="corner-bl"></div>
+          <div class="corner-br"></div>
+          <div class="scan-line"></div>
+          <div class="scan-label">Bottom-left of card here</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="status-bar">
+      <div class="status-dot" id="status-dot"></div>
+      <span id="status-text">Camera not started — click Start Scanner</span>
+    </div>
+
+    <div class="controls">
+      <button class="btn primary" id="start-btn" onclick="toggleCamera()">
+        ▶ Start scanner
+      </button>
+      <select id="cond-select" title="Condition">
+        <option value="NM">Near Mint</option>
+        <option value="LP">Lightly Played</option>
+        <option value="MP">Moderately Played</option>
+        <option value="HP">Heavily Played</option>
+        <option value="DMG">Damaged</option>
+      </select>
+      <label class="foil-label">
+        <input type="checkbox" id="foil-check"> Foil
+      </label>
+    </div>
+  </div>
+
+  <!-- Manual add -->
+  <div class="manual-section">
+    <label>Manual entry — fallback if OCR misreads</label>
+    <div class="manual-row">
+      <input type="text" id="manual-set" placeholder="SET (e.g. DMU)" maxlength="6">
+      <input type="text" id="manual-num" placeholder="# (e.g. 123)" maxlength="6">
+      <button class="btn" onclick="manualAdd()">+ Add card</button>
+    </div>
+  </div>
+
+  <!-- Card list -->
+  <div class="list-panel">
+    <div class="list-header">
+      <div class="list-title">Scanned cards <span id="list-count">0 cards</span></div>
+      <button class="btn primary" id="export-btn" onclick="exportCSV()" disabled>
+        ↓ Export Moxfield CSV
+      </button>
+    </div>
+    <div id="list-body">
+      <div class="empty-state">
+        <div class="empty-icon">⧉</div>
+        <div>No cards scanned yet</div>
+      </div>
+    </div>
+    <div class="tip">
+      <strong>Tip:</strong> The set code and collector number are printed at the bottom-left of every Magic card, like <strong>DMU · 123</strong>.
+      Good lighting is key — avoid glare and shadows on the card text.
+    </div>
+  </div>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script>
+let cards = [];
+let cameraOn = false;
+let stream = null;
+let worker = null;
+let scanning = false;
+let lastKey = '';
+let lastTime = 0;
+let scanInterval = null;
+
+const video  = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+
+function setStatus(msg, state) {
+  document.getElementById('status-text').textContent = msg;
+  const dot = document.getElementById('status-dot');
+  dot.className = 'status-dot' + (state ? ' ' + state : '');
+}
+
+async function toggleCamera() {
+  const btn = document.getElementById('start-btn');
+  if (!cameraOn) {
+    try {
+      setStatus('Requesting camera access…');
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }
+      });
+      video.srcObject = stream;
+      await video.play();
+      cameraOn = true;
+      btn.textContent = '■ Stop scanner';
+
+      setStatus('Loading OCR engine…', 'warn');
+      worker = await Tesseract.createWorker('eng', 1, { logger: () => {} });
+      await worker.setParameters({
+        tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789·•/ -',
+        tessedit_pageseg_mode: '6'
+      });
+
+      setStatus('Scanning — align set code + collector number in the box', 'active');
+      scanInterval = setInterval(doScan, 1200);
+    } catch(e) {
+      setStatus('Camera error: ' + (e.message || 'permission denied'), 'err');
+    }
+  } else {
+    stopCamera();
+    btn.textContent = '▶ Start scanner';
+  }
+}
+
+function stopCamera() {
+  clearInterval(scanInterval);
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  if (worker) worker.terminate();
+  cameraOn = false;
+  video.srcObject = null;
+  setStatus('Scanner stopped');
+}
+
+async function doScan() {
+  if (scanning || !cameraOn || video.readyState < 2) return;
+  scanning = true;
+  try {
+    const vw = video.videoWidth, vh = video.videoHeight;
+    if (!vw || !vh) { scanning = false; return; }
+    canvas.width = vw; canvas.height = vh;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0);
+
+    // Crop bottom-left corner where MTG set code/collector number lives
+    // Two lines: "R 0202" above "MH3 • EN"
+    const bw = Math.round(vw * 0.42), bh = Math.round(vh * 0.18);
+    const bx = Math.round(vw * 0.02);
+    const by = Math.round(vh * 0.78);
+    const roi = ctx.getImageData(bx, by, bw, bh);
+
+    // Upscale for better OCR
+    const rc = document.createElement('canvas');
+    rc.width = bw * 3; rc.height = bh * 3;
+    const rctx = rc.getContext('2d');
+    rctx.putImageData(roi, 0, 0);
+    rctx.drawImage(rc, 0, 0, bw, bh, 0, 0, rc.width, rc.height);
+
+    // Sharpen via contrast boost
+    rctx.filter = 'contrast(1.6) brightness(1.1)';
+    rctx.drawImage(rc, 0, 0);
+
+    const { data: { text } } = await worker.recognize(rc);
+    const match = parseCode(text);
+    if (match) {
+      const key = match.set + '|' + match.num;
+      const now = Date.now();
+      if (key !== lastKey || now - lastTime > 5000) {
+        lastKey = key; lastTime = now;
+        setStatus(`Detected ${match.set.toUpperCase()} #${match.num} — querying Scryfall…`, 'warn');
+        await lookup(match.set, match.num, match.lang);
+      }
+    }
+  } catch(e) {}
+  scanning = false;
+}
+
+function parseCode(raw) {
+  // Keep original lines for multi-line pattern matching
+  const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
+  const flat  = lines.join(' ');
+
+  // PATTERN 1 (primary): actual MTG card layout
+  // Line 1: [Rarity] [CollectorNum]  e.g. "R 0202" or "U 045"
+  // Line 2: [SET] • [LANG]           e.g. "MH3 • EN" or "MH3 · EN"
+  for (let i = 0; i < lines.length - 1; i++) {
+    const l1 = lines[i];
+    const l2 = lines[i + 1];
+    const numMatch = l1.match(/^[A-Za-z]?\s*(\d{1,4})\s*$/);
+    const setMatch = l2.match(/^([A-Za-z]{2,6})\s*[·•\-]\s*([A-Za-z]{2})\b/);
+    if (numMatch && setMatch) {
+      return { set: setMatch[1].toLowerCase(), num: numMatch[1], lang: setMatch[2].toLowerCase() };
+    }
+  }
+
+  // PATTERN 2: set·lang and number anywhere on same line or nearby
+  // e.g. "MH3 • EN" with "0202" somewhere close
+  const setLangRe = /\b([A-Za-z]{2,6})\s*[·•]\s*([A-Za-z]{2})\b/g;
+  const numRe     = /\b[CWURMBGPST]?\s*(\d{1,4})\b/g;
+  let sm;
+  while ((sm = setLangRe.exec(flat)) !== null) {
+    const setCode = sm[1];
+    if (['EN','FR','DE','IT','ES','PT','JP','KO','RU','CS','CT'].includes(setCode.toUpperCase())) continue;
+    numRe.lastIndex = 0;
+    let nm;
+    while ((nm = numRe.exec(flat)) !== null) {
+      return { set: setCode.toLowerCase(), num: nm[1], lang: sm[2].toLowerCase() };
+    }
+  }
+
+  // PATTERN 3: classic inline SET · NUMBER (older card formats)
+  const re3 = /\b([A-Za-z]{2,6})\s*[·•\/\-]\s*(\d{1,4})\b/g;
+  let m3;
+  while ((m3 = re3.exec(flat)) !== null) {
+    if (/^\d+$/.test(m3[1])) continue;
+    return { set: m3[1].toLowerCase(), num: m3[2] };
+  }
+
+  // PATTERN 4: number/total SET (e.g. "202/300 MH3")
+  const re4 = /(\d{1,4})\s*\/\s*\d{1,4}\s+([A-Za-z]{2,6})\b/g;
+  let m4;
+  while ((m4 = re4.exec(flat)) !== null) {
+    return { set: m4[2].toLowerCase(), num: m4[1] };
+  }
+
+  return null;
+}
+
+async function lookup(set, num, detectedLang) {
+  try {
+    const res = await fetch(`https://api.scryfall.com/cards/${encodeURIComponent(set)}/${encodeURIComponent(num)}`);
+    if (!res.ok) {
+      setStatus(`Not found: ${set.toUpperCase()} #${num} — check the code and try again`, 'err');
+      return;
+    }
+    const card = await res.json();
+    if (detectedLang) card._detectedLang = detectedLang;
+    addCard(card);
+  } catch(e) {
+    setStatus('Network error reaching Scryfall', 'err');
+  }
+}
+
+function addCard(sc) {
+  const foil = document.getElementById('foil-check').checked;
+  const cond = document.getElementById('cond-select').value;
+  const setCode = (sc.set || '').toUpperCase();
+  const collNum = sc.collector_number || '';
+  const existing = cards.find(c => c.set === setCode && c.num === collNum && c.foil === foil);
+  if (existing) {
+    existing.qty++;
+    setStatus(`+1 copy of ${sc.name} (now ×${existing.qty})`, 'active');
+  } else {
+    cards.unshift({ name: sc.name, set: setCode, num: collNum, qty: 1, foil, cond, lang: sc._detectedLang || sc.lang || 'en' });
+    setStatus(`✓ Added: ${sc.name} — ${setCode} #${collNum}`, 'active');
+  }
+  renderList();
+}
+
+async function manualAdd() {
+  const set = document.getElementById('manual-set').value.trim().toLowerCase();
+  const num = document.getElementById('manual-num').value.trim();
+  if (!set || !num) { setStatus('Enter both set code and collector number', 'warn'); return; }
+  setStatus(`Looking up ${set.toUpperCase()} #${num}…`, 'warn');
+  await lookup(set, num);
+  document.getElementById('manual-set').value = '';
+  document.getElementById('manual-num').value = '';
+}
+
+document.getElementById('manual-num').addEventListener('keydown', e => { if (e.key === 'Enter') manualAdd(); });
+document.getElementById('manual-set').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('manual-num').focus(); });
+document.getElementById('manual-set').addEventListener('input', function() { this.value = this.value.toUpperCase(); });
+
+function changeQty(i, d) {
+  cards[i].qty = Math.max(1, cards[i].qty + d);
+  renderList();
+}
+
+function removeCard(i) {
+  cards.splice(i, 1);
+  renderList();
+}
+
+function renderList() {
+  const total = cards.reduce((s, c) => s + c.qty, 0);
+  const label = `${cards.length} card${cards.length !== 1 ? 's' : ''} · ${total} total`;
+  document.getElementById('list-count').textContent = label;
+  document.getElementById('export-btn').disabled = cards.length === 0;
+
+  if (cards.length === 0) {
+    document.getElementById('list-body').innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">⧉</div>
+        <div>No cards scanned yet</div>
+      </div>`;
+    return;
+  }
+
+  const rows = cards.map((c, i) => `
+    <tr class="${i === 0 ? 'flash' : ''}">
+      <td><span class="card-name">${c.name}</span></td>
+      <td><span class="card-set">${c.set} · ${c.num}</span></td>
+      <td>
+        <div class="qty-ctrl">
+          <button class="qty-btn" onclick="changeQty(${i},-1)" aria-label="Decrease">−</button>
+          <span class="qty-num">${c.qty}</span>
+          <button class="qty-btn" onclick="changeQty(${i},1)" aria-label="Increase">+</button>
+        </div>
+      </td>
+      <td>${c.foil ? '<span class="foil-badge">FOIL</span>' : '<span style="color:var(--muted);font-size:11px">—</span>'}</td>
+      <td style="color:var(--muted);font-size:11px">${c.cond}</td>
+      <td style="color:var(--muted);font-size:11px">${c.lang}</td>
+      <td><button class="del-btn" onclick="removeCard(${i})" aria-label="Remove">✕</button></td>
+    </tr>`).join('');
+
+  document.getElementById('list-body').innerHTML = `
+    <table>
+      <thead><tr>
+        <th>Card</th><th>Set · #</th><th>Qty</th><th>Foil</th><th>Cond</th><th>Lang</th><th></th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function exportCSV() {
+  const header = 'Count,Name,Edition,Collector Number,Condition,Foil,Language';
+  const rows = cards.map(c => {
+    const name = `"${c.name.replace(/"/g, '""')}"`;
+    const foil = c.foil ? 'foil' : '';
+    return `${c.qty},${name},${c.set},${c.num},${c.cond},${foil},${c.lang}`;
+  });
+  const csv = [header, ...rows].join('\r\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `moxfield_${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setStatus(`Exported ${cards.length} unique cards (${cards.reduce((s,c)=>s+c.qty,0)} total) to CSV`, 'active');
+}
+
+renderList();
+</script>
+</body>
+</html>
